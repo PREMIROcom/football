@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Football Chain Online</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #00b894; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+        .container { background: white; border-radius: 20px; padding: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); width: 100%; max-width: 450px; text-align: center; }
+        .screen { display: none; }
+        .active { display: block; }
+        input { width: 100%; padding: 15px; margin: 10px 0; border: 2px solid #ddd; border-radius: 10px; text-align: center; font-size: 1.1em; outline: none; }
+        input:focus { border-color: #00b894; }
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 1.1em; margin-top: 10px; transition: 0.3s; }
+        .btn-host { background: #00b894; color: white; }
+        .btn-join { background: #0984e3; color: white; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        .room-code { background: #f1f2f6; padding: 15px; font-size: 1.5em; letter-spacing: 5px; margin: 15px 0; border-radius: 10px; border: 2px dashed #00b894; font-family: monospace; }
+        .status { margin-top: 10px; color: #d63031; font-weight: bold; }
+        .player-list { text-align: left; margin: 20px 0; padding: 15px; background: #f9f9f9; border-radius: 10px; }
+        #target-display { font-size: 2em; font-weight: 800; color: #00b894; margin: 20px 0; }
+        .turn-indicator { background: #ffeaa7; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-weight: bold; }
+        .score-badge { display: inline-block; background: #74b9ff; color: white; padding: 3px 8px; border-radius: 12px; font-size: 0.85em; margin-left: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>⚽ Football Chain</h1>
+
+    <div id="screen-setup" class="screen active">
+        <input type="text" id="name-input" placeholder="Your Name">
+        <button id="btn-create" class="btn btn-host" onclick="startHost()">Create Room</button>
+        <div style="margin: 15px; color: #666;">-- OR --</div>
+        <input type="text" id="code-input" placeholder="Enter Room Code">
+        <button id="btn-join" class="btn btn-join" onclick="startJoin()">Join Room</button>
+        <p id="setup-status" class="status"></p>
+    </div>
+
+    <div id="screen-lobby" class="screen">
+        <h3>Room Code:</h3>
+        <div id="display-code" class="room-code">------</div>
+        <div class="player-list">
+            <strong>Players in Room:</strong>
+            <div id="list-content"></div>
+        </div>
+        <button id="start-btn" class="btn btn-host" style="display:none;" onclick="hostStartGame()">Start Game</button>
+    </div>
+
+    <div id="screen-game" class="screen">
+        <div id="turn-msg" class="turn-indicator">Waiting...</div>
+        <p id="instructionText">Name a Club for:</p>
+        <div id="target-display">Cristiano Ronaldo</div>
+        <input type="text" id="game-input" placeholder="Type answer...">
+        <button class="btn btn-host" onclick="submitMove()">SUBMIT</button>
+        <p id="game-status" class="status"></p>
+        <div class="player-list">
+            <strong>Scores:</strong>
+            <div id="score-list"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let peer, conn, myName, isHost = false;
+    let players = []; 
+    let gameState = {
+        currentPlayerIndex: 0,
+        mode: "CLUB",
+        target: "Cristiano Ronaldo",
+        activeClub: ""
+    };
+
+    // Check if PeerJS loaded successfully
+    window.addEventListener('load', () => {
+        if (typeof Peer === 'undefined') {
+            document.getElementById('setup-status').innerText = "Error: PeerJS failed to load. Check internet connection.";
+            document.getElementById('btn-create').disabled = true;
+            document.getElementById('btn-join').disabled = true;
+        }
+    });
+
+    const footballData = [
+        { club: "Barcelona", players: ["Lionel Messi", "Neymar", "Xavi", "Zlatan Ibrahimovic", "Gerard Pique", "Ronaldinho", "Luis Suarez", "Andres Iniesta", "Samuel Eto'o", "Thierry Henry", "Dani Alves", "Carles Puyol", "Sergio Busquets", "David Villa", "Pedro", "Marc-Andre ter Stegen", "Antoine Griezmann", "Ousmane Dembele", "Jordi Alba", "Frenkie de Jong", "Robert Lewandowski", "Pedri", "Gavi", "Rivaldo", "Patrick Kluivert", "Deco", "Javier Mascherano", "Alexis Sanchez", "Cesc Fabregas", "Yaya Toure", "Eric Abidal"] },
+        { club: "Real Madrid", players: ["Cristiano Ronaldo", "Karim Benzema", "Luka Modric", "Sergio Ramos", "Kaka", "Zinedine Zidane", "Jude Bellingham", "Vinicius Junior", "Gareth Bale", "Toni Kroos", "Eden Hazard", "Iker Casillas", "Raul", "Thibaut Courtois", "Marcelo", "Roberto Carlos", "Luis Figo", "David Beckham", "Ronaldo Nazario", "Fernando Hierro", "Mesut Ozil", "Xabi Alonso", "Arjen Robben", "Wesley Sneijder", "Alvaro Morata", "James Rodriguez", "Casemiro", "Pepe", "Fabio Cannavaro", "Steve McManaman", "Michael Owen", "Rodrygo", "Eduardo Camavinga", "Aurelien Tchouameni"] },
+        { club: "Manchester United", players: ["Cristiano Ronaldo", "Wayne Rooney", "Marcus Rashford", "Zlatan Ibrahimovic", "David Beckham", "Paul Pogba", "Bruno Fernandes", "Ryan Giggs", "Paul Scholes", "Roy Keane", "Eric Cantona", "Rio Ferdinand", "Nemanja Vidic", "Edwin van der Sar", "Peter Schmeichel", "Robin van Persie", "Dimitar Berbatov", "Ruud van Nistelrooy", "Andy Cole", "Dwight Yorke", "Ole Gunnar Solskjaer", "David de Gea", "Patrice Evra", "Gary Neville", "Denis Law", "Bobby Charlton", "George Best", "Jadon Sancho", "Casemiro", "Raphael Varane", "Lisandro Martinez", "Mason Mount", "Antony"] },
+        { club: "AC Milan", players: ["Zlatan Ibrahimovic", "Kaka", "Andrea Pirlo", "Ronaldinho", "Alexandre Pato", "Clarence Seedorf", "Paolo Maldini", "Franco Baresi", "Alessandro Nesta", "Cafu", "Andriy Shevchenko", "Filippo Inzaghi", "Gennaro Gattuso", "Dida", "Rui Costa", "Marco van Basten", "Ruud Gullit", "Frank Rijkaard", "George Weah", "Roberto Baggio", "Hernan Crespo", "Robinho", "Thiago Silva", "Zlatan Ibrahimovic", "Rafael Leao", "Theo Hernandez", "Mike Maignan", "Olivier Giroud"] },
+        { club: "PSG", players: ["Kylian Mbappe", "Lionel Messi", "Neymar", "Zlatan Ibrahimovic", "Sergio Ramos", "Edinson Cavani", "Marco Verratti", "Thiago Silva", "Marquinhos", "Angel Di Maria", "Gianluigi Buffon", "Mauro Icardi", "Achraf Hakimi", "David Beckham", "Ronaldinho", "Jay-Jay Okocha", "George Weah", "Claude Makelele", "Thiago Motta", "Blaise Matuidi", "Javier Pastore", "Ezequiel Lavezzi", "Lucas Moura", "Julian Draxler", "Goncalo Ramos", "Ousmane Dembele", "Randal Kolo Muani"] },
+        { club: "Manchester City", players: ["Erling Haaland", "Kevin De Bruyne", "Sergio Aguero", "Carlos Tevez", "Rodri", "Yaya Toure", "David Silva", "Vincent Kompany", "Raheem Sterling", "Leroy Sane", "Gabriel Jesus", "Bernardo Silva", "Ederson", "Kyle Walker", "John Stones", "Ruben Dias", "Phil Foden", "Jack Grealish", "Riyad Mahrez", "Ilkay Gundogan", "Fernandinho", "Nicolas Otamendi", "Edin Dzeko", "Samir Nasri", "Joe Hart", "Pablo Zabaleta", "Kolo Toure", "Shaun Wright-Phillips", "Robinho", "Emmanuel Adebayor", "Julian Alvarez", "Josko Gvardiol"] },
+        { club: "Liverpool", players: ["Mohamed Salah", "Sadio Mane", "Roberto Firmino", "Luis Suarez", "Fernando Torres", "Steven Gerrard", "Virgil van Dijk", "Alisson Becker", "Trent Alexander-Arnold", "Andy Robertson", "Jordan Henderson", "Xabi Alonso", "Javier Mascherano", "Jamie Carragher", "Raheem Sterling", "Philippe Coutinho", "Dirk Kuyt", "Pepe Reina", "Sami Hyypia", "Robbie Fowler", "Michael Owen", "Ian Rush", "Kenny Dalglish", "John Barnes", "Graeme Souness", "Diogo Jota", "Thiago Alcantara", "Darwin Nunez", "Cody Gakpo", "Alexis Mac Allister", "Dominik Szoboszlai", "Luis Diaz"] },
+        { club: "Chelsea", players: ["Didier Drogba", "Frank Lampard", "Eden Hazard", "N'Golo Kante", "Thibaut Courtois", "Petr Cech", "John Terry", "Ashley Cole", "Gianfranco Zola", "Claude Makelele", "Michael Essien", "Ricardo Carvalho", "Arjen Robben", "Andriy Shevchenko", "Fernando Torres", "Juan Mata", "Diego Costa", "Nemanja Matic", "Cesar Azpilicueta", "David Luiz", "Gary Cahill", "Oscar", "Willian", "Ramires", "Florent Malouda", "Nicolas Anelka", "Salomon Kalou", "Kai Havertz", "Mason Mount", "Raheem Sterling", "Enzo Fernandez", "Moises Caicedo", "Cole Palmer"] },
+        { club: "Arsenal", players: ["Thierry Henry", "Dennis Bergkamp", "Patrick Vieira", "Tony Adams", "Ian Wright", "Robin van Persie", "Cesc Fabregas", "Alexis Sanchez", "Mesut Ozil", "Pierre-Emerick Aubameyang", "Alexandre Lacazette", "Bukayo Saka", "Martin Odegaard", "Gabriel Jesus", "William Saliba", "Aaron Ramsey", "Santi Cazorla", "Olivier Giroud", "Robert Pires", "Freddie Ljungberg", "Sol Campbell", "Ashley Cole", "Kolo Toure", "Lauren", "Gilberto Silva", "Emmanuel Adebayor", "Alex Iwobi", "Hector Bellerin", "David Seaman", "Jens Lehmann", "Declan Rice", "Kai Havertz", "Gabriel Martinelli"] },
+        { club: "Bayern Munich", players: ["Robert Lewandowski", "Thomas Muller", "Manuel Neuer", "Franck Ribery", "Arjen Robben", "Philipp Lahm", "Bastian Schweinsteiger", "Toni Kroos", "Jerome Boateng", "Mats Hummels", "David Alaba", "Joshua Kimmich", "Thiago Alcantara", "Xabi Alonso", "Mario Gotze", "Arturo Vidal", "Javi Martinez", "Mark van Bommel", "Luca Toni", "Roy Makaay", "Oliver Kahn", "Mehmet Scholl", "Michael Ballack", "Miroslav Klose", "Mario Gomez", "Harry Kane", "Sadio Mane", "Leroy Sane", "Serge Gnabry", "Alphonso Davies", "Jamal Musiala", "Kingsley Coman", "Dayot Upamecano"] },
+        { club: "Juventus", players: ["Cristiano Ronaldo", "Alessandro Del Piero", "Pavel Nedved", "Gianluigi Buffon", "Andrea Pirlo", "Zinedine Zidane", "Michel Platini", "Roberto Baggio", "David Trezeguet", "Filippo Inzaghi", "Giorgio Chiellini", "Leonardo Bonucci", "Claudio Marchisio", "Paul Pogba", "Arturo Vidal", "Carlos Tevez", "Gonzalo Higuain", "Paulo Dybala", "Alvaro Morata", "Sami Khedira", "Blaise Matuidi", "Fabio Cannavaro", "Edgar Davids", "Patrick Vieira", "Zlatan Ibrahimovic", "Dusan Vlahovic", "Federico Chiesa", "Weston McKennie", "Manuel Locatelli"] },
+        { club: "Inter Milan", players: ["Ronaldo Nazario", "Javier Zanetti", "Wesley Sneijder", "Diego Milito", "Samuel Eto'o", "Zlatan Ibrahimovic", "Adriano", "Hernan Crespo", "Christian Vieri", "Julio Cesar", "Maicon", "Esteban Cambiasso", "Ivan Zamorano", "Roberto Baggio", "Romelu Lukaku", "Lautaro Martinez", "Nicolo Barella", "Marcelo Brozovic", "Milan Skriniar", "Alessandro Bastoni", "Andre Onana", "Hakan Calhanoglu", "Marcus Thuram"] },
+        { club: "Atletico Madrid", players: ["Antoine Griezmann", "Fernando Torres", "Sergio Aguero", "Diego Costa", "Radamel Falcao", "Luis Suarez", "Koke", "Jan Oblak", "Diego Godin", "Filipe Luis", "Juanfran", "Gabi", "Saul Niguez", "Joao Felix", "Thomas Lemar", "Yannick Carrasco", "Marcos Llorente", "Jose Gimenez", "Stefan Savic", "Alvaro Morata", "Diego Simeone"] },
+        { club: "Borussia Dortmund", players: ["Erling Haaland", "Robert Lewandowski", "Jadon Sancho", "Marco Reus", "Pierre-Emerick Aubameyang", "Ousmane Dembele", "Mario Gotze", "Shinji Kagawa", "Ilkay Gundogan", "Mats Hummels", "Nuri Sahin", "Jurgen Klopp", "Jude Bellingham", "Giovanni Reyna", "Julian Brandt", "Raphael Guerreiro", "Marius Wolf", "Nico Schlotterbeck", "Gregor Kobel", "Karim Adeyemi", "Donyell Malen"] },
+        { club: "Tottenham", players: ["Harry Kane", "Son Heung-min", "Gareth Bale", "Luka Modric", "Rafael van der Vaart", "Dimitar Berbatov", "Robbie Keane", "Jermain Defoe", "Teddy Sheringham", "Glenn Hoddle", "Paul Gascoigne", "Christian Eriksen", "Dele Alli", "Hugo Lloris", "Toby Alderweireld", "Jan Vertonghen", "Mousa Dembele", "Erik Lamela", "Heung-Min Son", "Lucas Moura", "Richarlison", "James Maddison", "Dejan Kulusevski"] },
+        { club: "Ajax", players: ["Johan Cruyff", "Marco van Basten", "Frank Rijkaard", "Dennis Bergkamp", "Edwin van der Sar", "Patrick Kluivert", "Clarence Seedorf", "Edgar Davids", "Wesley Sneijder", "Rafael van der Vaart", "Luis Suarez", "Zlatan Ibrahimovic", "Christian Eriksen", "Frenkie de Jong", "Matthijs de Ligt", "Hakim Ziyech", "Donny van de Beek", "Dusan Tadic", "Antony", "Lisandro Martinez"] },
+        { club: "Roma", players: ["Francesco Totti", "Daniele De Rossi", "Gabriel Batistuta", "Cafu", "Aldair", "Vincent Candela", "Edin Dzeko", "Mohamed Salah", "Radja Nainggolan", "Alisson Becker", "Marquinhos", "Mehdi Benatia", "Miralem Pjanic", "Kevin Strootman", "Paulo Dybala", "Tammy Abraham", "Lorenzo Pellegrini"] },
+        { club: "Napoli", players: ["Diego Maradona", "Edinson Cavani", "Gonzalo Higuain", "Lorenzo Insigne", "Dries Mertens", "Marek Hamsik", "Kalidou Koulibaly", "Jose Callejon", "Faouzi Ghoulam", "Allan", "Jorginho", "Victor Osimhen", "Khvicha Kvaratskhelia", "Giovanni Di Lorenzo", "Kim Min-jae", "Piotr Zielinski"] },
+        { club: "Sevilla", players: ["Sergio Ramos", "Dani Alves", "Jesus Navas", "Ivan Rakitic", "Ever Banega", "Luis Fabiano", "Frederic Kanoute", "Julio Baptista", "Jose Antonio Reyes", "Carlos Bacca", "Kevin Gameiro", "Wissam Ben Yedder", "Lucas Ocampos", "Youssef En-Nesyri"] },
+        { club: "Valencia", players: ["David Villa", "David Silva", "Juan Mata", "Pablo Aimar", "Vicente Rodriguez", "Gaizka Mendieta", "Santiago Canizares", "Claudio Marchisio", "Roberto Ayala", "Ever Banega", "Jordi Alba", "Nicolas Otamendi", "Sofiane Feghouli", "Rodrigo Moreno"] }
+    ];
+
+    function show(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    }
+
+    function startHost() {
+        myName = document.getElementById('name-input').value.trim();
+        if(!myName) return alert("Enter your name!");
+        const roomID = Math.random().toString(36).substring(2, 8).toUpperCase();
+        
+        // Final safety check for library
+        if (typeof Peer === 'undefined') return alert("PeerJS not loaded yet. Check your connection.");
+
+        peer = new Peer(roomID);
+        peer.on('open', id => {
+            isHost = true;
+            players = [{id: id, name: myName, score: 0, eliminated: false}];
+            document.getElementById('display-code').innerText = id;
+            updateLobbyUI();
+            show('screen-lobby');
+        });
+
+        peer.on('error', err => {
+            console.error(err);
+            alert("Error: " + err.type);
+        });
+
+        peer.on('connection', c => {
+            c.on('data', data => {
+                if(data.type === 'JOIN') {
+                    players.push({id: c.peer, name: data.name, score: 0, eliminated: false});
+                    updateLobbyUI();
+                    broadcast({type: 'SYNC', list: players});
+                }
+                if(data.type === 'MOVE') handleMove(data);
+            });
+        });
+    }
+
+    function startJoin() {
+        myName = document.getElementById('name-input').value.trim();
+        let code = document.getElementById('code-input').value.trim().toUpperCase();
+        if(!myName || !code) return alert("Enter name and code!");
+        
+        if (typeof Peer === 'undefined') return alert("PeerJS not loaded yet.");
+
+        peer = new Peer();
+        peer.on('open', id => {
+            conn = peer.connect(code);
+            conn.on('data', data => {
+                if(data.type === 'SYNC') { players = data.list; updateLobbyUI(); }
+                if(data.type === 'START') { gameState = data.state; startGameUI(); }
+                if(data.type === 'UPDATE') { gameState = data.state; updateGameUI(); updateScores(); }
+            });
+            conn.on('open', () => {
+                conn.send({type: 'JOIN', name: myName});
+                document.getElementById('display-code').innerText = code;
+                show('screen-lobby');
+            });
+        });
+    }
+
+    function broadcast(data) {
+        if(!isHost) return;
+        Object.values(peer.connections).forEach(conns => {
+            if(conns[0].open) conns[0].send(data);
+        });
+    }
+
+    function hostStartGame() {
+        gameState.currentPlayerIndex = 0;
+        const randomClub = footballData[Math.floor(Math.random() * footballData.length)];
+        const randomPlayer = randomClub.players[Math.floor(Math.random() * randomClub.players.length)];
+        gameState.target = randomPlayer;
+        gameState.mode = "CLUB";
+        broadcast({type: 'START', state: gameState});
+        startGameUI();
+    }
+
+    function startGameUI() {
+        show('screen-game');
+        updateGameUI();
+        updateScores();
+    }
+
+    function updateGameUI() {
+        const turnPlayer = players[gameState.currentPlayerIndex];
+        document.getElementById('turn-msg').innerText = turnPlayer.name + "'s Turn";
+        document.getElementById('target-display').innerText = gameState.target;
+        document.getElementById('instructionText').innerText = gameState.mode === "CLUB" ? "Name a CLUB for:" : "Name a PLAYER from " + gameState.activeClub + ":";
+        document.getElementById('game-status').innerText = "";
+    }
+
+    function updateScores() {
+        const scoreDiv = document.getElementById('score-list');
+        scoreDiv.innerHTML = players.filter(p => !p.eliminated).map(p => 
+            `<div>• ${p.name} <span class="score-badge">${p.score} pts</span></div>`
+        ).join('');
+    }
+
+    function fuzzyMatch(input, target) {
+        input = input.toLowerCase().replace(/[^a-z0-9]/g, '');
+        target = target.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if(input === target) return true;
+        let score = 0;
+        for(let char of input) { if(target.includes(char)) score++; }
+        return (score / target.length) > 0.75; 
+    }
+
+    function submitMove() {
+        const turnPlayer = players[gameState.currentPlayerIndex];
+        if(peer.id !== turnPlayer.id) return alert("Wait for your turn!");
+        const input = document.getElementById('game-input').value.trim();
+        if(!input) return;
+        if(isHost) handleMove({val: input});
+        else conn.send({type: 'MOVE', val: input});
+        document.getElementById('game-input').value = "";
+    }
+
+    function handleMove(data) {
+        const input = data.val;
+        let success = false;
+
+        if(gameState.mode === "CLUB") {
+            const clubObj = footballData.find(c => fuzzyMatch(input, c.club) && c.players.some(p => fuzzyMatch(gameState.target, p)));
+            if(clubObj) {
+                gameState.mode = "PLAYER";
+                gameState.activeClub = clubObj.club;
+                gameState.target = clubObj.club;
+                players[gameState.currentPlayerIndex].score += 10;
+                success = true;
+            }
+        } else {
+            const clubObj = footballData.find(c => c.club === gameState.activeClub);
+            const player = clubObj.players.find(p => fuzzyMatch(input, p) && p !== gameState.target);
+            if(player) {
+                gameState.mode = "CLUB";
+                gameState.target = player;
+                players[gameState.currentPlayerIndex].score += 10;
+                success = true;
+            }
+        }
+
+        if(success) {
+            let nextIndex = (gameState.currentPlayerIndex + 1) % players.length;
+            while(players[nextIndex].eliminated) nextIndex = (nextIndex + 1) % players.length;
+            gameState.currentPlayerIndex = nextIndex;
+            
+            if(isHost) {
+                broadcast({type: 'UPDATE', state: gameState, players: players});
+                updateGameUI();
+                updateScores();
+            }
+        } else {
+            const outPlayer = players[gameState.currentPlayerIndex];
+            outPlayer.eliminated = true;
+            const remaining = players.filter(p => !p.eliminated);
+            
+            if(remaining.length <= 1) {
+                alert("🏆 GAME OVER! Winner: " + remaining[0].name);
+                location.reload();
+            } else {
+                let nextIndex = (gameState.currentPlayerIndex + 1) % players.length;
+                while(players[nextIndex].eliminated) nextIndex = (nextIndex + 1) % players.length;
+                gameState.currentPlayerIndex = nextIndex;
+                
+                broadcast({type: 'SYNC', list: players});
+                broadcast({type: 'UPDATE', state: gameState, players: players});
+                if(isHost) { updateGameUI(); updateScores(); }
+                alert(outPlayer.name + " is OUT! ❌");
+            }
+        }
+    }
+
+    function updateLobbyUI() {
+        document.getElementById('list-content').innerHTML = players.map(p => `<div>• ${p.name}</div>`).join('');
+        if(isHost && players.length > 1) document.getElementById('start-btn').style.display = 'block';
+    }
+</script>
+</body>
+</html>
